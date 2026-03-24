@@ -1,0 +1,124 @@
+name: Windows 11 RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check Docker
+        run: |
+          docker --version
+          echo "✅ Docker is ready"
+      
+      - name: Start Windows 11 Container
+        run: |
+          # Run Windows container
+          docker run -d \
+            --name windows \
+            --restart unless-stopped \
+            -e VERSION="11" \
+            -e USERNAME="angkerith" \
+            -e PASSWORD="admin@123" \
+            -e RAM_SIZE="4G" \
+            -e CPU_CORES="2" \
+            -e KVM="N" \
+            -e DISK_SIZE="50G" \
+            -p 8006:8006 \
+            -p 3389:3389 \
+            dockurr/windows
+          
+          echo "✅ Windows container started"
+          docker ps
+          
+          echo "⏳ Waiting for Windows to boot (this takes 5-10 minutes)..."
+      
+      - name: Wait for Windows to Initialize
+        run: |
+          # Give Windows time to start
+          echo "Waiting 30 seconds for initial setup..."
+          sleep 30
+          
+          # Check container status
+          docker logs windows --tail 20
+      
+      - name: Install Cloudflared
+        run: |
+          # Download cloudflared
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared-linux-amd64
+          sudo mv cloudflared-linux-amd64 /usr/local/bin/cloudflared
+          echo "✅ Cloudflared installed"
+      
+      - name: Create Cloudflare Tunnel
+        run: |
+          # Start tunnel in background
+          nohup cloudflared tunnel --url http://localhost:8006 > tunnel.log 2>&1 &
+          
+          # Wait for tunnel to establish
+          echo "⏳ Creating Cloudflare tunnel..."
+          sleep 20
+          
+          # Extract the URL
+          echo ""
+          echo "=========================================="
+          echo "🎉 WINDOWS 11 IS READY! 🎉"
+          echo "=========================================="
+          
+          WEB_URL=$(grep -o 'https://[a-z0-9]*\.trycloudflare\.com' tunnel.log | head -1)
+          
+          if [ -n "$WEB_URL" ]; then
+            echo "🌍 WEB ACCESS (NoVNC):"
+            echo "   $WEB_URL"
+            echo ""
+            echo "🖥️  RDP ACCESS:"
+            echo "   $WEB_URL (use port 3389 in RDP client)"
+            echo ""
+            echo "🔑 LOGIN CREDENTIALS:"
+            echo "   Username: angkerith"
+            echo "   Password: admin@123"
+            echo ""
+            echo "⏰ This tunnel will stay active for 6 hours"
+            echo "=========================================="
+          else
+            echo "⚠️  Waiting for tunnel URL..."
+            sleep 10
+            WEB_URL=$(grep -o 'https://[a-z0-9]*\.trycloudflare\.com' tunnel.log | head -1)
+            if [ -n "$WEB_URL" ]; then
+              echo "🌍 Web Access: $WEB_URL"
+            else
+              echo "Check tunnel.log for details"
+              cat tunnel.log
+            fi
+          fi
+          
+          # Save URL for later
+          echo "$WEB_URL" > web_url.txt
+      
+      - name: Monitor Container
+        run: |
+          echo ""
+          echo "📊 Container Status:"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          echo ""
+          echo "📝 Recent logs:"
+          docker logs windows --tail 10
+          echo ""
+          echo "✅ Windows 11 is running!"
+          echo "🌍 Use the URL above to connect"
+          echo ""
+          echo "⏰ Keeping runner alive for 6 hours..."
+          
+          # Keep the runner alive
+          sleep 6h
+      
+      - name: Cleanup (on cancel)
+        if: always()
+        run: |
+          echo "Stopping Windows container..."
+          docker stop windows
+          echo "Cleanup complete"
